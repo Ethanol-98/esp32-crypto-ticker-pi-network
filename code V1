@@ -1,0 +1,159 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <ArduinoJson.h>
+#include <SPI.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+
+// ─── TFT SETUP ─────────────────────────────────────────────
+#define TFT_CS   15
+#define TFT_DC    2
+#define TFT_RST   4
+Adafruit_ST7789 tft(TFT_CS, TFT_DC, TFT_RST);
+
+// ─── WIFI ──────────────────────────────────────────────────
+const char* WIFI_SSID = "YOUR_WIFI_NAME";
+const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+
+// ─── UPDATE SETTINGS ──────────────────────────────────────
+const unsigned long UPDATE_INTERVAL = 30UL * 1000UL;
+unsigned long lastUpdate = 0;
+
+#define HIST_SIZE 120
+float priceHistory[HIST_SIZE];
+int histIndex = 0;
+int histCount = 0;
+float lastPrice = 0.0;
+
+const int SAMPLES_5MIN  = 10;
+const int SAMPLES_60MIN = 120;
+
+void setup() {
+  Serial.begin(115200);
+  tft.init(170, 320);
+  tft.setRotation(1);
+  tft.fillScreen(ST77XX_BLACK);
+
+  connectWiFi();
+  histCount = 0;
+  fetchAndDisplayPrice();
+  lastUpdate = millis();
+}
+
+void connectWiFi() {
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setTextSize(2);
+  tft.setTextColor(ST77XX_WHITE);
+  tft.setCursor(10, 10);
+  tft.print("Connecting WiFi");
+
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  int retries = 0;
+  while (WiFi.status() != WL_CONNECTED && retries < 60) {
+    delay(500);
+    tft.print('.');
+    retries++;
+  }
+
+  tft.fillScreen(ST77XX_BLACK);
+  tft.setCursor(10, 10);
+  if (WiFi.status() == WL_CONNECTED) {
+    tft.setTextColor(ST77XX_GREEN);
+    tft.print("IP: ");
+    tft.print(WiFi.localIP());
+  } else {
+    tft.setTextColor(ST77XX_RED);
+    tft.print("WiFi Failed");
+  }
+}
+
+void loop() {
+  if (millis() - lastUpdate >= UPDATE_INTERVAL) {
+    lastUpdate = millis();
+    fetchAndDisplayPrice();
+  }
+}
+
+void fetchAndDisplayPrice() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+    return;
+  }
+
+  WiFiClientSecure client;
+  client.setInsecure();
+  HTTPClient https;
+  https.begin(client, "https://api.coingecko.com/api/v3/simple/price?ids=pi-network&vs_currencies=usd");
+
+  int code = https.GET();
+  if (code == HTTP_CODE_OK) {
+    String s = https.getString();
+    StaticJsonDocument<200> doc;
+    if (deserializeJson(doc, s) == DeserializationError::Ok) {
+      float price = doc["pi-network"]["usd"];
+      storePrice(price);
+      displayPrice(price);
+      Serial.printf("Price: $%.2f\n", price);
+    }
+  }
+  https.end();
+}
+
+void storePrice(float price) {
+  if (histCount < HIST_SIZE) {
+    for (int i = 0; i < HIST_SIZE; i++) priceHistory[i] = price;
+    histCount = HIST_SIZE;
+    histIndex = 0;
+  }
+  priceHistory[histIndex] = price;
+  histIndex = (histIndex + 1) % HIST_SIZE;
+}
+
+float getPastPrice(int samplesAgo) {
+  if (histCount < samplesAgo) return NAN;
+  int idx = (histIndex + HIST_SIZE - samplesAgo) % HIST_SIZE;
+  return priceHistory[idx];
+}
+
+void displayPrice(float price) {
+  tft.fillScreen(ST77XX_BLACK);
+  char buf[16];
+  sprintf(buf, "$%.2f", price);
+  tft.setTextSize(5);
+  uint16_t color = (lastPrice > 0 && price < lastPrice) ? ST77XX_RED : ST77XX_GREEN;
+  tft.setTextColor(color);
+
+  int16_t x1, y1;
+  uint16_t w, h;
+  tft.getTextBounds(buf, 0, 0, &x1, &y1, &w, &h);
+  tft.setCursor((tft.width() - w) / 2 - x1, 20);
+  tft.print(buf);
+
+  float p5  = getPastPrice(SAMPLES_5MIN);
+  float p60 = getPastPrice(SAMPLES_60MIN);
+  char c5[12], c60[12];
+  if (!isnan(p5)) sprintf(c5, "5m %+.2f%%", (price - p5) / p5 * 100);
+  else strcpy(c5, "5m --.--%%");
+
+  if (!isnan(p60)) sprintf(c60, "1h %+.2f%%", (price - p60) / p60 * 100);
+  else strcpy(c60, "1h --.--%%");
+
+  tft.setTextSize(2);
+  int spacing = 10;
+  uint16_t w5, h5, w60, h60;
+  tft.getTextBounds(c5,  0, 0, &x1, &y1, &w5, &h5);
+  tft.getTextBounds(c60, 0, 0, &x1, &y1, &w60, &h60);
+  int16_t yPercent  = tft.height() - max(h5, h60) - 20;
+  int16_t xStart    = (tft.width() - (w5 + spacing + w60)) / 2;
+
+  tft.setTextColor((!isnan(p5) && price < p5) ? ST77XX_RED : ST77XX_GREEN);
+  tft.setCursor(xStart, yPercent);
+  tft.print(c5);
+
+  tft.setTextColor((!isnan(p60) && price < p60) ? ST77XX_RED : ST77XX_GREEN);
+  tft.setCursor(xStart + w5 + spacing, yPercent);
+  tft.print(c60);
+
+  lastPrice = price;
+}
