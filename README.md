@@ -36,7 +36,17 @@ Install these via Arduino Library Manager:
 - `ArduinoJson`
 - `Adafruit GFX`
 - `Adafruit ST7789`
+## Setup
+
+1. Clone or download this repository.
+
+2. Open `src/crypto_ticker.ino` in Arduino IDE.
+
+3. Update the WiFi credentials:
+   ```cpp
+   const char* WIFI_SSID = "YOUR_WIFI_NAME";
+   const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
 4.	Connect your ESP32 board via USB.
-	5.	Select the correct board type and COM port in Tools > Board and Tools > Port.
-	6.	Click Upload to flash the code to your ESP32.
-	7.	Once powered, the screen will update the PI price every 30 seconds and show percent changes over time.
+5.	Select the correct board type and COM port in Tools > Board and Tools > Port.
+6.	Click Upload to flash the code to your ESP32.
+7.	Once powered, the screen will update the PI price every 30 seconds and show percent changes over time.
